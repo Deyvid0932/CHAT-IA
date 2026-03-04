@@ -1,0 +1,17 @@
+# --- BACKEND (Python/FastAPI) ---
+.venv/
+__pycache__/
+*.py[cod]
+.env
+temp_*
+*.pdf
+
+# --- FRONTEND (React/Vite) ---
+node_modules/
+dist/
+.env.local
+
+# --- OTROS ---
+.DS_Store
+.vscode/
+.idea/
