@@ -4,10 +4,10 @@ import { useState, useEffect } from 'react'
 
 export interface Chat {
   id: string
-
   title: string
   messages: any[]
   pdfContent: string | null
+  pdfName: string | null
   createdAt: Date
   updatedAt: Date
 }
@@ -27,13 +27,28 @@ export function useChatLocal() {
         const data = await response.json()
         
         const parsedChats = data.chats.map((chat: any) => ({
-          ...chat,
+          id: chat.id,
+          title: chat.titulo,
+          pdfName: chat.pdf_nombre,
+          messages: (chat.messages || []).map((m: any) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            fileName: m.fileName || null // Aquí aseguramos que React reciba fileName correctamente
+          })),
+          pdfContent: chat.pdf_content,
           createdAt: new Date(chat.fecha_creacion),
           updatedAt: new Date(chat.fecha_actualizacion),
         }))
         
-        if (parsedChats.length > 0) {
-          setChats(parsedChats)
+        setChats(parsedChats)
+        
+        // Recuperar el último chat abierto de localStorage
+        const lastChatId = localStorage.getItem('last_chat_id')
+        
+        if (lastChatId && parsedChats.some((c: Chat) => c.id === lastChatId)) {
+          setCurrentChatId(lastChatId)
+        } else if (parsedChats.length > 0) {
           setCurrentChatId(parsedChats[0].id)
         } else {
           // Si no hay chats en la DB, creamos el primero
@@ -47,6 +62,13 @@ export function useChatLocal() {
     }
     fetchChats()
   }, [])
+
+  // Persistir el chat actual en localStorage cuando cambie
+  useEffect(() => {
+    if (currentChatId) {
+      localStorage.setItem('last_chat_id', currentChatId)
+    }
+  }, [currentChatId])
 
   const createNewChat = async () => {
     const newId = Date.now().toString()
@@ -95,15 +117,15 @@ export function useChatLocal() {
     })
   }
 
-  const updateChatPDF = (chatId: string, pdfContent: string) => {
-    // Podríamos añadir un endpoint para esto, pero por ahora lo mantenemos en memoria
-    // o lo guardamos si el usuario lo sube.
+  const updateChatPDF = (chatId: string, pdfContent: string, pdfName: string) => {
+    // Actualizamos el estado local para que la UI refleje el cambio inmediatamente
     setChats(prevChats => {
       return prevChats.map((chat) =>
         chat.id === chatId
           ? {
               ...chat,
-              pdfContent,
+              pdfContent: pdfContent,
+              pdfName: pdfName,
               updatedAt: new Date(),
             }
           : chat

@@ -37,19 +37,24 @@ function App() {
   const { conciseness, speed } = useSettings()
   const [pdfLoaded, setPdfLoaded] = useState(false)
   const [pdfContent, setPdfContent] = useState('')
+  const [pdfName, setPdfName] = useState('')
 
   // Sincronizar mensajes cuando cambia el chat seleccionado
   useEffect(() => {
     const currentChat = chats.find(c => c.id === currentChatId)
     if (currentChat) {
       setMessages(currentChat.messages || [])
-      setPdfContent(currentChat.pdfContent || '')
-      setPdfLoaded(!!currentChat.pdfContent)
+      // Al cambiar de chat o recargar, NO cargamos el PDF en el input bar
+      // El asistente ya tiene el contexto en el backend.
+      setPdfContent('')
+      setPdfName('')
+      setPdfLoaded(false)
     } else if (chats.length > 0 && !currentChatId) {
-      // No hacer nada si hay chats pero no hay ID seleccionado aún
+      // No hacer nada
     } else {
       setMessages([])
       setPdfContent('')
+      setPdfName('')
       setPdfLoaded(false)
     }
     
@@ -67,11 +72,13 @@ function App() {
       activeChatId = newChat.id
     }
 
+    const currentFile = fileName || pdfName
+
     const newMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
       content,
-      fileName
+      fileName: currentFile || undefined
     }
     
     const updatedMessages = [...messages, newMessage]
@@ -79,14 +86,23 @@ function App() {
     updateChatMessages(activeChatId, updatedMessages)
     setIsLoading(true)
 
+    // LIMPIEZA INMEDIATA: Borramos el PDF del área de entrada ni bien se manda
+    const pdfContentToSend = pdfContent
+    const pdfNameToSend = currentFile
+
+    setPdfContent('')
+    setPdfName('')
+    setPdfLoaded(false)
+
     try {
       const response = await fetch('http://127.0.0.1:8000/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: content,
-          pdfContext: pdfContent,
+          pdfContext: pdfContentToSend,
           chatId: activeChatId,
+          fileName: pdfNameToSend, // Enviamos el nombre al backend
           conciseness: conciseness,
           speed: speed
         }),
@@ -99,25 +115,25 @@ function App() {
         role: 'assistant',
         content: data.response || 'No recibí respuesta del servidor.',
       }
-      
+
       const finalMessages = [...updatedMessages, assistantMessage]
       setMessages(finalMessages)
       updateChatMessages(activeChatId as string, finalMessages)
+
     } catch (error) {
       console.error('Error:', error)
     } finally {
       setIsLoading(false)
-    }
-  }, [currentChatId, messages, pdfContent, conciseness, speed, createNewChat, updateChatMessages])
+    }  }, [currentChatId, messages, pdfContent, pdfName, conciseness, speed, createNewChat, updateChatMessages])
 
-  const onPdfUpload = useCallback(async (content: string, uploadChatId: string, _summary?: string) => {
+  const onPdfUpload = useCallback(async (content: string, uploadChatId: string, fileName?: string) => {
     // Ya tenemos el chatId que usó ChatInput para subir el PDF
-    updateChatPDF(uploadChatId, content)
+    const name = fileName || 'Documento PDF'
+    updateChatPDF(uploadChatId, content, name)
     
-    // No añadimos mensajes al historial para evitar residuos visuales. 
-    // El PDF queda listo para ser usado en el contexto de la siguiente pregunta.
     setPdfLoaded(true)
     setPdfContent(content)
+    setPdfName(name)
   }, [updateChatPDF])
 
   const [colorScheme, setColorScheme] = useState<'default' | 'white' | 'dark'>('default')
@@ -185,6 +201,7 @@ function App() {
           onPdfUpload={onPdfUpload}
           isLoading={isLoading}
           pdfLoaded={pdfLoaded}
+          pdfName={pdfName}
           chatId={currentChatId}
           onGetOrCreatedChatId={getOrCreatedChatId}
         />

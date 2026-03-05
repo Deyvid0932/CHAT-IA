@@ -9,9 +9,10 @@ import { LoadingSpinner } from './loading-spinner'
 //Interface = reglas
 interface ChatInputProps {
   onSendMessage: (message: string, fileName?: string) => void
-  onPdfUpload: (content: string, chatId: string, summary?: string) => void
+  onPdfUpload: (content: string, chatId: string, fileName?: string) => void
   isLoading: boolean
   pdfLoaded: boolean
+  pdfName?: string | null
   chatId: string | null
   onGetOrCreatedChatId: () => Promise<string>
   onSettingsClick?: () => void
@@ -21,6 +22,8 @@ export function ChatInput({
   onSendMessage,
   onPdfUpload,
   isLoading,
+  pdfLoaded,
+  pdfName,
   chatId,
   onGetOrCreatedChatId
 }: ChatInputProps) {
@@ -34,10 +37,9 @@ export function ChatInput({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (input.trim() && !isLoading) {
-      onSendMessage(input, pdfFile?.name)
+      onSendMessage(input, pdfFile?.name || (pdfLoaded ? pdfName || undefined : undefined))
       setInput('')
-      // Limpiar el estado visual del PDF después de enviarlo para que no quede como residuo
-      clearPDF()
+      setPdfFile(null)
     }
   }
 
@@ -66,7 +68,7 @@ export function ChatInput({
         body: formData,
       })
       const data = await response.json()
-      onPdfUpload(data.text, activeChatId, data.summary)
+      onPdfUpload(data.text, activeChatId, file.name)
     } catch (error) {
       console.error('Error al subir PDF:', error)
       alert('Error al conectar con el backend para procesar el PDF.')
@@ -82,14 +84,16 @@ export function ChatInput({
     }
   }
 
+  const currentFileName = pdfFile?.name || (pdfLoaded ? pdfName : null)
+
   return (
     <div className="bg-card border-t border-border p-4 space-y-3">
       {/* PDF Status */}
-      {pdfFile && (
+      {currentFileName && (
         <div className="bg-emerald-600/10 border border-emerald-600/50 rounded-lg p-3 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400">
             <Upload size={16} />
-            <span className="truncate">{pdfFile.name}</span>
+            <span className="truncate">{currentFileName}</span>
           </div>
           <button
             onClick={clearPDF}

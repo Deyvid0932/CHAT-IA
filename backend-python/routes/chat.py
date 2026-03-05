@@ -7,7 +7,8 @@ from services.database import (
     crear_sesion_chat,
     eliminar_sesion_chat,
     eliminar_todos_los_chats,
-    actualizar_titulo_chat
+    actualizar_titulo_chat,
+    limpiar_pdf_sesion # IMPORTANTE
 )
 
 router = APIRouter()
@@ -38,29 +39,32 @@ async def clear_chats():
 async def chat_endpoint(data: dict):
     pregunta = data.get("message")
     chat_id = data.get("chatId")
-    
+    file_name = data.get("fileName") # Recibimos el nombre del archivo
+
     if not chat_id:
         raise HTTPException(status_code=400, detail="chatId es requerido")
 
     # Recuperamos los documentos de la DB para este chat específico
     contexto_db = obtener_todos_los_documentos(chat_id)
-    
+
     # Si el frontend envía algo extra, lo sumamos
     contexto_extra = data.get("pdfContext", "")
-    
+
     contexto_final = f"{contexto_db}\n{contexto_extra}".strip()
-    
+
     conciseness = data.get("conciseness", "balanced")
     speed = data.get("speed", "normal")
 
     respuesta = get_ollama_chat_response(pregunta, contexto_final, conciseness, speed)
 
-    # GUARDAR EN LA BASE DE DATOS
-    guardar_mensaje(chat_id, "user", pregunta)
+    # GUARDAR EN LA BASE DE DATOS con el nombre del archivo si existe
+    guardar_mensaje(chat_id, "user", pregunta, file_name)
     guardar_mensaje(chat_id, "assistant", respuesta)
 
-    # Si es el primer mensaje, podríamos actualizar el título del chat
-    # (Opcional, pero ayuda a la UI)
+    # LIMPIAR EL PDF DE LA SESIÓN para evitar autocarga en el futuro
+    limpiar_pdf_sesion(chat_id)
+
+    # Actualizar título si es el primer mensaje
     actualizar_titulo_chat(chat_id, pregunta[:30] + "...")
 
     return {"response": respuesta}

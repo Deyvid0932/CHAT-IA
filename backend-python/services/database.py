@@ -41,6 +41,7 @@ def crear_tablas():
             id VARCHAR(50) PRIMARY KEY,
             titulo VARCHAR(255) NOT NULL,
             pdf_content LONGTEXT,
+            pdf_nombre VARCHAR(255),
             fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
@@ -80,23 +81,30 @@ def crear_tablas():
             chat_id VARCHAR(50),
             rol ENUM('user', 'assistant') NOT NULL,
             contenido TEXT NOT NULL,
+            nombre_archivo VARCHAR(255),
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (chat_id) REFERENCES sesiones_chat(id) ON DELETE CASCADE
         )
         """)
+        
+        try:
+            cursor.execute("ALTER TABLE historial_chat ADD COLUMN nombre_archivo VARCHAR(255)")
+        except:
+            pass
+            
         db.commit()
         cursor.close()
         db.close()
         print("✅ Base de datos inicializada (Tablas multi-chat aseguradas).")
 
 
-def guardar_mensaje(chat_id, rol, contenido):
-    """Guarda un mensaje individual en el historial."""
+def guardar_mensaje(chat_id, rol, contenido, nombre_archivo=None):
+    """Guarda un mensaje individual en el historial con nombre de archivo opcional."""
     db = obtener_conexion()
     if db:
         cursor = db.cursor()
-        query = "INSERT INTO historial_chat (chat_id, rol, contenido) VALUES (%s, %s, %s)"
-        cursor.execute(query, (chat_id, rol, contenido))
+        query = "INSERT INTO historial_chat (chat_id, rol, contenido, nombre_archivo) VALUES (%s, %s, %s, %s)"
+        cursor.execute(query, (chat_id, rol, contenido, nombre_archivo))
         db.commit()
         cursor.close()
         db.close()
@@ -152,9 +160,14 @@ def obtener_chats():
         
         for sesion in sesiones:
             # Obtenemos los mensajes de cada sesión
-            cursor.execute("SELECT id, rol, contenido FROM historial_chat WHERE chat_id = %s ORDER BY fecha ASC", (sesion['id'],))
+            cursor.execute("SELECT id, rol, contenido, nombre_archivo FROM historial_chat WHERE chat_id = %s ORDER BY fecha ASC", (sesion['id'],))
             mensajes = cursor.fetchall()
-            sesion['messages'] = [{"id": str(m['id']), "role": m['rol'], "content": m['contenido']} for m in mensajes]
+            sesion['messages'] = [{
+                "id": str(m['id']), 
+                "role": m['rol'], 
+                "content": m['contenido'],
+                "fileName": m['nombre_archivo']
+            } for m in mensajes]
             
         cursor.close()
         db.close()
@@ -163,17 +176,35 @@ def obtener_chats():
 
 
 def guardar_documento(chat_id, nombre, contenido):
-    """Guarda el texto en MySQL asociado a un chat específico"""
+    """Guarda el texto y el nombre en MySQL asociado a un chat específico y actualiza la sesión"""
     db = obtener_conexion()
     if db:
         cursor = db.cursor()
-        query = "INSERT INTO documentos_pdf (chat_id, nombre_archivo, contenido_texto) VALUES (%s, %s, %s)"
-        cursor.execute(query, (chat_id, nombre, contenido))
+        # 1. Guardar en la tabla histórica de documentos
+        query_doc = "INSERT INTO documentos_pdf (chat_id, nombre_archivo, contenido_texto) VALUES (%s, %s, %s)"
+        cursor.execute(query_doc, (chat_id, nombre, contenido))
+        
+        # 2. Actualizar la sesión con contenido y NOMBRE del archivo
+        query_session = "UPDATE sesiones_chat SET pdf_content = %s, pdf_nombre = %s WHERE id = %s"
+        cursor.execute(query_session, (contenido, nombre, chat_id))
+        
         db.commit()
         cursor.close()
         db.close()
-        print(f"✅ Memoria guardada exitosamente para el chat {chat_id}.")
+        print(f"✅ PDF '{nombre}' guardado y sesión actualizada para el chat {chat_id}.")
 
+
+def limpiar_pdf_sesion(chat_id):
+    """Limpia el contenido y nombre del PDF de la sesión (para evitar autocarga)."""
+    db = obtener_conexion()
+    if db:
+        cursor = db.cursor()
+        query = "UPDATE sesiones_chat SET pdf_content = NULL, pdf_nombre = NULL WHERE id = %s"
+        cursor.execute(query, (chat_id,))
+        db.commit()
+        cursor.close()
+        db.close()
+        print(f"🧹 Contexto de PDF limpiado para la sesión {chat_id}.")
 
 def obtener_todos_los_documentos(chat_id):
     """Recupera los PDFs guardados. Si se pasa chat_id, filtra por ese chat."""
