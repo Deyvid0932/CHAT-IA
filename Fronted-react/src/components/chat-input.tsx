@@ -1,12 +1,10 @@
 'use client'
-// Martes 24-02-2026
 import { useState, useRef } from 'react'
 import { Send, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { LoadingSpinner } from './loading-spinner'
 
-//Interface = reglas
 interface ChatInputProps {
   onSendMessage: (message: string, fileName?: string) => void
   onPdfUpload: (content: string, chatId: string, fileName?: string) => void
@@ -27,8 +25,6 @@ export function ChatInput({
   chatId,
   onGetOrCreatedChatId
 }: ChatInputProps) {
-// ... (omitting some lines for brevity in instruction, but will include in new_string)
-// Actually I'll provide full block to be safe.
   const [input, setInput] = useState('')
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [extracting, setExtracting] = useState(false)
@@ -56,7 +52,7 @@ export function ChatInput({
     setExtracting(true)
 
     try {
-      // Nos aseguramos de tener un chatId antes de subir
+
       const activeChatId = chatId || await onGetOrCreatedChatId()
 
       const formData = new FormData()
@@ -77,7 +73,7 @@ export function ChatInput({
     }
   }
 
-  const clearPDF = () => {
+ const clearPDF = () => {
     setPdfFile(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''

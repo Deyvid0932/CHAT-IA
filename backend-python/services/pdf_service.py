@@ -1,7 +1,7 @@
 import os
 import shutil
 from pypdf import PdfReader
-from services.database import guardar_documento
+from services.database import guardar_documento, guardar_documento_rag
 
 def extract_text_from_pdf(file_path):
     reader = PdfReader(file_path)
@@ -20,11 +20,11 @@ def process_pdf_file(file, chat_id):
     try:
         text = extract_text_from_pdf(file_path)
         
-        # GUARDAR EN LA BASE DE DATOS con chat_id
+        # GUARDAR EN LA BASE DE DATOS (Texto completo y Chunks para RAG)
         guardar_documento(chat_id, file.filename, text)
+        guardar_documento_rag(chat_id, file.filename, text)
         
         return {"text": text, "filename": file.filename}
-
 
     finally:
         if os.path.exists(file_path):

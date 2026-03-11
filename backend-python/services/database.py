@@ -2,10 +2,11 @@ import mysql.connector
 import os
 from dotenv import load_dotenv
 from urllib.parse import urlparse  # Importante para romper la URL
+from sentence_transformers import SentenceTransformer
 
 # Carga el archivo .env
 load_dotenv()
-
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def obtener_conexion():
     """Conecta a MySQL usando una única DB_URL del archivo .env"""
@@ -31,7 +32,7 @@ def obtener_conexion():
 
 
 def crear_tablas():
-    """Crea las tablas necesarias si no existen."""
+    """Crea las tablas necesarias si no existen y asegura que las columnas existan."""
     db = obtener_conexion()
     if db:
         cursor = db.cursor()
@@ -40,8 +41,6 @@ def crear_tablas():
         CREATE TABLE IF NOT EXISTS sesiones_chat (
             id VARCHAR(50) PRIMARY KEY,
             titulo VARCHAR(255) NOT NULL,
-            pdf_content LONGTEXT,
-            pdf_nombre VARCHAR(255),
             fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
@@ -58,12 +57,13 @@ def crear_tablas():
         )
         """)
 
-        # Intentar añadir la columna chat_id y la foreign key si no existen
+        # Asegurar que chat_id existe en documentos_pdf
         try:
             cursor.execute("ALTER TABLE documentos_pdf ADD COLUMN chat_id VARCHAR(50)")
         except:
-            pass # Ya existe
+            pass
 
+        # Intentar añadir la foreign key para documentos_pdf
         try:
             cursor.execute("""
                 ALTER TABLE documentos_pdf 
@@ -72,7 +72,7 @@ def crear_tablas():
                 ON DELETE CASCADE
             """)
         except:
-            pass # Ya existe o error
+            pass
 
         # Tabla para Historial de Mensajes
         cursor.execute("""
@@ -87,22 +87,42 @@ def crear_tablas():
         )
         """)
         
+        # Asegurar que nombre_archivo existe en historial_chat
         try:
             cursor.execute("ALTER TABLE historial_chat ADD COLUMN nombre_archivo VARCHAR(255)")
         except:
             pass
+
+        # Tabla para Chunks de Documentos (RAG)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS documentos_chunks (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            chat_id VARCHAR(50),
+            nombre_archivo VARCHAR(255) NOT NULL,
+            contenido_chunk TEXT NOT NULL,
+            indice INT NOT NULL,
+            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (chat_id) REFERENCES sesiones_chat(id) ON DELETE CASCADE
+        )
+        """)
             
         db.commit()
         cursor.close()
         db.close()
-        print("✅ Base de datos inicializada (Tablas multi-chat aseguradas).")
+        print("✅ Base de datos inicializada y esquema verificado.")
 
 
 def guardar_mensaje(chat_id, rol, contenido, nombre_archivo=None):
-    """Guarda un mensaje individual en el historial con nombre de archivo opcional."""
+    """Guarda un mensaje individual en el historial con nombre de archivo opcional. Crea la sesión si no existe."""
     db = obtener_conexion()
     if db:
         cursor = db.cursor()
+        
+        # Verificar si la sesión existe
+        cursor.execute("SELECT id FROM sesiones_chat WHERE id = %s", (chat_id,))
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO sesiones_chat (id, titulo) VALUES (%s, %s)", (chat_id, "Nueva conversación"))
+            
         query = "INSERT INTO historial_chat (chat_id, rol, contenido, nombre_archivo) VALUES (%s, %s, %s, %s)"
         cursor.execute(query, (chat_id, rol, contenido, nombre_archivo))
         db.commit()
@@ -110,11 +130,12 @@ def guardar_mensaje(chat_id, rol, contenido, nombre_archivo=None):
         db.close()
 
 def crear_sesion_chat(chat_id, titulo):
-    """Crea una nueva sesión de chat en la DB."""
+    """Crea una nueva sesión de chat en la DB. Ignora si ya existe."""
     db = obtener_conexion()
     if db:
         cursor = db.cursor()
-        query = "INSERT INTO sesiones_chat (id, titulo) VALUES (%s, %s)"
+        # Usamos INSERT IGNORE para evitar errores si ya se creó automáticamente
+        query = "INSERT IGNORE INTO sesiones_chat (id, titulo) VALUES (%s, %s)"
         cursor.execute(query, (chat_id, titulo))
         db.commit()
         cursor.close()
@@ -176,61 +197,92 @@ def obtener_chats():
 
 
 def guardar_documento(chat_id, nombre, contenido):
-    """Guarda el texto y el nombre en MySQL asociado a un chat específico y actualiza la sesión"""
+    """Guarda un documento PDF. Crea la sesión si no existe para evitar errores de FK."""
     db = obtener_conexion()
     if db:
-        cursor = db.cursor()
-        # 1. Guardar en la tabla histórica de documentos
-        query_doc = "INSERT INTO documentos_pdf (chat_id, nombre_archivo, contenido_texto) VALUES (%s, %s, %s)"
-        cursor.execute(query_doc, (chat_id, nombre, contenido))
-        
-        # 2. Actualizar la sesión con contenido y NOMBRE del archivo
-        query_session = "UPDATE sesiones_chat SET pdf_content = %s, pdf_nombre = %s WHERE id = %s"
-        cursor.execute(query_session, (contenido, nombre, chat_id))
-        
-        db.commit()
-        cursor.close()
-        db.close()
-        print(f"✅ PDF '{nombre}' guardado y sesión actualizada para el chat {chat_id}.")
+        try:
+            cursor = db.cursor()
+
+            # Verificar si la sesión existe antes de insertar el PDF
+            cursor.execute("SELECT id FROM sesiones_chat WHERE id = %s", (chat_id,))
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO sesiones_chat (id, titulo) VALUES (%s, %s)", (chat_id, "Nueva conversación"))
+
+            query_doc = "INSERT INTO documentos_pdf (chat_id, nombre_archivo, contenido_texto) VALUES (%s, %s, %s)"
+            cursor.execute(query_doc, (chat_id, nombre, contenido))
+
+            db.commit()
+            print(f"✅ PDF '{nombre}' guardado y sesión verificada para el chat {chat_id}.")
+            cursor.close()
+        except Exception as e:
+            print(f"❌ Error al guardar documento: {e}")
+        finally:
+            db.close()
 
 
-def limpiar_pdf_sesion(chat_id):
-    """Limpia el contenido y nombre del PDF de la sesión (para evitar autocarga)."""
+def guardar_documento_rag(chat_id, nombre, texto_completo):
+    print(f"DEBUG: Longitud del texto recibido: {len(texto_completo)} caracteres")
     db = obtener_conexion()
     if db:
-        cursor = db.cursor()
-        query = "UPDATE sesiones_chat SET pdf_content = NULL, pdf_nombre = NULL WHERE id = %s"
-        cursor.execute(query, (chat_id,))
-        db.commit()
-        cursor.close()
-        db.close()
-        print(f"🧹 Contexto de PDF limpiado para la sesión {chat_id}.")
+        try:
+            cursor = db.cursor()
 
-def obtener_todos_los_documentos(chat_id):
-    """Recupera los PDFs guardados. Si se pasa chat_id, filtra por ese chat."""
-    db = obtener_conexion()
-    if db:
-        cursor = db.cursor()
+            # Verificar si la sesión existe antes de insertar el PDF
+            cursor.execute("SELECT id FROM sesiones_chat WHERE id = %s", (chat_id,))
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO sesiones_chat (id, titulo) VALUES (%s, %s)", (chat_id, "Nueva conversación"))
 
-        query = """
-                SELECT nombre_archivo, contenido_texto
-                FROM documentos_pdf
-                WHERE chat_id = %s
-                ORDER BY fecha_subida DESC LIMIT 1
+            # 1. Picar el texto (Chunking)
+            # Dividimos por bloques de 800 caracteres
+            chunks = [texto_completo[i:i + 800] for i in range(0, len(texto_completo), 800)]
+
+            # 2. Guardar cada trozo
+            for i, chunk_text in enumerate(chunks):
+                query = """
+                INSERT INTO documentos_chunks (chat_id, nombre_archivo, contenido_chunk, indice)
+                VALUES (%s, %s, %s, %s)
                 """
+                cursor.execute(query, (chat_id, nombre, chunk_text, i))
 
-        cursor.execute(query, (chat_id,))
+            db.commit()
+            print(f"✅ Documento '{nombre}' procesado para RAG y guardado ({len(chunks)} chunks) para el chat {chat_id}.")
+            cursor.close()
+        except Exception as e:
+            print(f"❌ Error al guardar documento RAG: {e}")
+        finally:
+            db.close()
 
-        row = cursor.fetchone()
+def obtener_todos_los_documentos(chat_id, nombre_archivo=None):
+    """Recupera los PDFs guardados para este chat. Si se da un nombre, recupera solo ese."""
+    db = obtener_conexion()
+    if db:
+        cursor = db.cursor()
 
-        if row:
-            # MANTENER: El formato de retorno, pero solo para un archivo
-            contexto = f"\n--- ARCHIVO ACTUAL: {row[0]} ---\n{row[1]}\n"
+        if nombre_archivo:
+            query = """
+                    SELECT nombre_archivo, contenido_texto
+                    FROM documentos_pdf
+                    WHERE chat_id = %s AND nombre_archivo = %s
+                    LIMIT 1
+                    """
+            cursor.execute(query, (chat_id, nombre_archivo))
         else:
-            contexto = ""
+            query = """
+                    SELECT nombre_archivo, contenido_texto
+                    FROM documentos_pdf
+                    WHERE chat_id = %s
+                    ORDER BY fecha_subida DESC
+                    """
+            cursor.execute(query, (chat_id,))
+            
+        rows = cursor.fetchall()
 
-        cursor.close()  # MANTENER: Siempre cierra el cursor
-        db.close()  # MANTENER: Siempre cierra la conexión
+        contexto = ""
+        for row in rows:
+            contexto += f"\n--- ARCHIVO: {row[0]} ---\n{row[1]}\n"
+
+        cursor.close()
+        db.close()
 
         return contexto
 
@@ -238,17 +290,34 @@ def obtener_todos_los_documentos(chat_id):
 
 
 def obtener_contexto_para_chat(chat_id):
-    """Obtiene solo el texto relacionado a la conversación actual"""
+    """Obtiene el texto relacionado a la conversación actual, incluyendo chunks si existen."""
     db = obtener_conexion()
-    if not db: return ""
+    if not db:
+        return ""
 
-    cursor = db.cursor()
-    # Filtramos estrictamente por el chat_id
-    query = "SELECT contenido_texto FROM documentos_pdf WHERE chat_id = %s ORDER BY fecha_subida DESC LIMIT 1"
-    cursor.execute(query, (chat_id,))
+    cursor = db.cursor(dictionary=True)
+    # 1) Obtener PDF más reciente
+    pdf_query = "SELECT nombre_archivo, contenido_texto FROM documentos_pdf WHERE chat_id = %s ORDER BY fecha_subida DESC LIMIT 1"
+    cursor.execute(pdf_query, (chat_id,))
+    pdf_row = cursor.fetchone()
+    pdf_text = pdf_row.get("contenido_texto") if pdf_row else ""
+    pdf_name = pdf_row.get("nombre_archivo") if pdf_row else None
 
-    resultado = cursor.fetchone()
+    # 2) Obtener chunks
+    chunk_query = "SELECT nombre_archivo, contenido_chunk, indice FROM documentos_chunks WHERE chat_id = %s ORDER BY indice ASC"
+    cursor.execute(chunk_query, (chat_id,))
+    chunks = cursor.fetchall()
+
+    contexto = ""
+    if chunks:
+        for c in chunks:
+            contexto += f"\n--- ARCHIVO: {c['nombre_archivo']} (chunk {c['indice']}) ---\n{c['contenido_chunk']}"
+        contexto = contexto.strip()
+    if not contexto and pdf_text:
+        contexto = pdf_text
+    elif contexto and pdf_text:
+        contexto = f"{contexto}\n\nDATOS DEL ARCHIVO (PDF reciente: {pdf_name}):\n{pdf_text}"
+
     cursor.close()
     db.close()
-
-    return resultado[0] if resultado else ""
+    return contexto

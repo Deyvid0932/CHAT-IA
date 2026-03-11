@@ -77,24 +77,30 @@ export function useChatLocal() {
       title: 'Nueva conversación',
       messages: [],
       pdfContent: null,
+      pdfName: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     }
     
     try {
-      await fetch(`${API_BASE_URL}/chats`, {
+      const response = await fetch(`${API_BASE_URL}/chats`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: newId, title: newChat.title })
       })
       
+      if (!response.ok) {
+        throw new Error('Error al crear el chat en el servidor')
+      }
+      
       setChats(prevChats => [newChat, ...prevChats])
       setCurrentChatId(newId)
+      return newChat
     } catch (error) {
       console.error('Error creating chat in DB:', error)
+      alert('Error al crear una nueva conversación en la base de datos.')
+      return null
     }
-    
-    return newChat
   }
 
   const updateChatMessages = (chatId: string, messages: any[]) => {

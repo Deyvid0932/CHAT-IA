@@ -69,6 +69,7 @@ function App() {
     // Si no hay chat seleccionado, crear uno automáticamente
     if (!activeChatId) {
       const newChat = await createNewChat()
+      if (!newChat) return // Error al crear chat
       activeChatId = newChat.id
     }
 
@@ -141,6 +142,7 @@ function App() {
   const getOrCreatedChatId = useCallback(async () => {
     if (currentChatId) return currentChatId
     const newChat = await createNewChat()
+    if (!newChat) return "" // O manejar de otra forma
     return newChat.id
   }, [currentChatId, createNewChat])
 
