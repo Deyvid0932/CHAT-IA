@@ -1,22 +1,19 @@
 import mysql.connector
 import os
+import chromadb
 from dotenv import load_dotenv
-from urllib.parse import urlparse  # Importante para romper la URL
-from sentence_transformers import SentenceTransformer
+from urllib.parse import urlparse
 
-# Carga el archivo .env
+from config import DB_PATH
+
 load_dotenv()
-model = SentenceTransformer('all-MiniLM-L6-v2')
 
-def obtener_conexion():
-    """Conecta a MySQL usando una única DB_URL del archivo .env"""
+def get_connection():
     try:
-        # Extraemos la URL del entorno
         db_url = os.getenv("DATABASE_URL")
         if not db_url:
-            raise ValueError("No se encontró DATABASE_URL en el archivo .env")
+            raise ValueError("DATABASE_URL not found in .env file")
 
-        # Parseamos la URL para obtener los datos por separado
         url = urlparse(db_url)
 
         return mysql.connector.connect(
@@ -24,300 +21,345 @@ def obtener_conexion():
             user=url.username,
             password=url.password,
             port=url.port or 3306,
-            database=url.path[1:]  # Quitamos la '/' inicial del nombre de la DB
+            database=url.path[1:]
         )
     except Exception as e:
-        print(f"❌ Error de conexión con DB_URL: {e}")
+        print(f"❌ Connection error with DB_URL: {e}")
         return None
 
 
-def crear_tablas():
-    """Crea las tablas necesarias si no existen y asegura que las columnas existan."""
-    db = obtener_conexion()
+def create_tables():
+    db = get_connection()
     if db:
         cursor = db.cursor()
-        # Tabla para Sesiones de Chat
+
+        # 1. Tabla de Sesiones (La base de todo)
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sesiones_chat (
+        CREATE TABLE IF NOT EXISTS chat_sessions (
             id VARCHAR(50) PRIMARY KEY,
-            titulo VARCHAR(255) NOT NULL,
-            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        )
+            title VARCHAR(255) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB
         """)
 
-        # Tabla para PDFs asociada a un Chat
+        # 2. Tabla de PDFs (Con la relación integrada)
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS documentos_pdf (
+        CREATE TABLE IF NOT EXISTS pdf_documents (
             id INT AUTO_INCREMENT PRIMARY KEY,
             chat_id VARCHAR(50),
-            nombre_archivo VARCHAR(255) NOT NULL,
-            contenido_texto LONGTEXT NOT NULL,
-            fecha_subida TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
+            file_name VARCHAR(255) NOT NULL,
+            text_content LONGTEXT NOT NULL,
+            upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_pdf_session FOREIGN KEY (chat_id) 
+                REFERENCES chat_sessions(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB
         """)
 
-        # Asegurar que chat_id existe en documentos_pdf
-        try:
-            cursor.execute("ALTER TABLE documentos_pdf ADD COLUMN chat_id VARCHAR(50)")
-        except:
-            pass
-
-        # Intentar añadir la foreign key para documentos_pdf
-        try:
-            cursor.execute("""
-                ALTER TABLE documentos_pdf 
-                ADD CONSTRAINT fk_chat_pdf 
-                FOREIGN KEY (chat_id) REFERENCES sesiones_chat(id) 
-                ON DELETE CASCADE
-            """)
-        except:
-            pass
-
-        # Tabla para Historial de Mensajes
+        # 3. Tabla de Historial
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS historial_chat (
+        CREATE TABLE IF NOT EXISTS chat_history (
             id INT AUTO_INCREMENT PRIMARY KEY,
             chat_id VARCHAR(50),
-            rol ENUM('user', 'assistant') NOT NULL,
-            contenido TEXT NOT NULL,
-            nombre_archivo VARCHAR(255),
-            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (chat_id) REFERENCES sesiones_chat(id) ON DELETE CASCADE
-        )
+            role ENUM('user', 'assistant') NOT NULL,
+            content TEXT NOT NULL,
+            file_name VARCHAR(255),
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_history_session FOREIGN KEY (chat_id) 
+                REFERENCES chat_sessions(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB
         """)
-        
-        # Asegurar que nombre_archivo existe en historial_chat
-        try:
-            cursor.execute("ALTER TABLE historial_chat ADD COLUMN nombre_archivo VARCHAR(255)")
-        except:
-            pass
 
-        # Tabla para Chunks de Documentos (RAG)
+        # 4. Tabla de Chunks
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS documentos_chunks (
+        CREATE TABLE IF NOT EXISTS document_chunks (
             id INT AUTO_INCREMENT PRIMARY KEY,
             chat_id VARCHAR(50),
-            nombre_archivo VARCHAR(255) NOT NULL,
-            contenido_chunk TEXT NOT NULL,
-            indice INT NOT NULL,
-            fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (chat_id) REFERENCES sesiones_chat(id) ON DELETE CASCADE
-        )
+            file_name VARCHAR(255) NOT NULL,
+            chunk_content TEXT NOT NULL,
+            idx INT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_chunks_session FOREIGN KEY (chat_id) 
+                REFERENCES chat_sessions(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB
         """)
-            
+
         db.commit()
         cursor.close()
         db.close()
-        print("✅ Base de datos inicializada y esquema verificado.")
+        print("✅ Base de datos sincronizada con relaciones CASCADE.")
 
 
-def guardar_mensaje(chat_id, rol, contenido, nombre_archivo=None):
-    """Guarda un mensaje individual en el historial con nombre de archivo opcional. Crea la sesión si no existe."""
-    db = obtener_conexion()
+def save_message(chat_id, role, content, file_name=None):
+    db = get_connection()
     if db:
         cursor = db.cursor()
-        
-        # Verificar si la sesión existe
-        cursor.execute("SELECT id FROM sesiones_chat WHERE id = %s", (chat_id,))
+
+        cursor.execute("SELECT id FROM chat_sessions WHERE id = %s", (chat_id,))
         if not cursor.fetchone():
-            cursor.execute("INSERT INTO sesiones_chat (id, titulo) VALUES (%s, %s)", (chat_id, "Nueva conversación"))
+            cursor.execute("INSERT INTO chat_sessions (id, title) VALUES (%s, %s)", (chat_id, "New conversation"))
             
-        query = "INSERT INTO historial_chat (chat_id, rol, contenido, nombre_archivo) VALUES (%s, %s, %s, %s)"
-        cursor.execute(query, (chat_id, rol, contenido, nombre_archivo))
+        query = "INSERT INTO chat_history (chat_id, role, content, file_name) VALUES (%s, %s, %s, %s)"
+        cursor.execute(query, (chat_id, role, content, file_name))
         db.commit()
         cursor.close()
         db.close()
 
-def crear_sesion_chat(chat_id, titulo):
-    """Crea una nueva sesión de chat en la DB. Ignora si ya existe."""
-    db = obtener_conexion()
+def create_chat_session(chat_id, title):
+    db = get_connection()
     if db:
         cursor = db.cursor()
-        # Usamos INSERT IGNORE para evitar errores si ya se creó automáticamente
-        query = "INSERT IGNORE INTO sesiones_chat (id, titulo) VALUES (%s, %s)"
-        cursor.execute(query, (chat_id, titulo))
+        query = "INSERT IGNORE INTO chat_sessions (id, title) VALUES (%s, %s)"
+        cursor.execute(query, (chat_id, title))
         db.commit()
         cursor.close()
         db.close()
 
-def actualizar_titulo_chat(chat_id, nuevo_titulo):
-    db = obtener_conexion()
+def update_chat_title(chat_id, new_title):
+    db = get_connection()
     if db:
         cursor = db.cursor()
-        query = "UPDATE sesiones_chat SET titulo = %s WHERE id = %s"
-        cursor.execute(query, (nuevo_titulo, chat_id))
+        query = "UPDATE chat_sessions SET title = %s WHERE id = %s"
+        cursor.execute(query, (new_title, chat_id))
         db.commit()
         cursor.close()
         db.close()
 
-def eliminar_sesion_chat(chat_id):
-    db = obtener_conexion()
+def delete_chat_session(chat_id):
+    db = get_connection()
     if db:
         cursor = db.cursor()
-        query = "DELETE FROM sesiones_chat WHERE id = %s"
+        query = "DELETE FROM chat_sessions WHERE id = %s"
         cursor.execute(query, (chat_id,))
         db.commit()
         cursor.close()
         db.close()
 
-def eliminar_todos_los_chats():
-    db = obtener_conexion()
+def delete_all_chats():
+    db = get_connection()
     if db:
         cursor = db.cursor()
-        cursor.execute("DELETE FROM sesiones_chat")
+        cursor.execute("DELETE FROM chat_sessions")
         db.commit()
         cursor.close()
         db.close()
 
-def obtener_chats():
-    """Obtiene todas las sesiones de chat con sus mensajes."""
-    db = obtener_conexion()
+def get_chats():
+    db = get_connection()
     if db:
         cursor = db.cursor(dictionary=True)
-        # Obtenemos las sesiones
-        cursor.execute("SELECT * FROM sesiones_chat ORDER BY fecha_actualizacion DESC")
-        sesiones = cursor.fetchall()
+        cursor.execute("SELECT * FROM chat_sessions ORDER BY updated_at DESC")
+        raw_sessions = cursor.fetchall()
         
-        for sesion in sesiones:
-            # Obtenemos los mensajes de cada sesión
-            cursor.execute("SELECT id, rol, contenido, nombre_archivo FROM historial_chat WHERE chat_id = %s ORDER BY fecha ASC", (sesion['id'],))
-            mensajes = cursor.fetchall()
-            sesion['messages'] = [{
+        sessions = []
+        for s in raw_sessions:
+            session = {
+                "id": s.get('id'),
+                "title": s.get('title') or s.get('titulo'),
+                "created_at": s.get('created_at') or s.get('fecha_creacion'),
+                "updated_at": s.get('updated_at') or s.get('fecha_actualizacion'),
+            }
+            
+            cursor.execute("SELECT id, role, content, file_name FROM chat_history WHERE chat_id = %s ORDER BY date ASC", (session['id'],))
+            messages = cursor.fetchall()
+            session['messages'] = [{
                 "id": str(m['id']), 
-                "role": m['rol'], 
-                "content": m['contenido'],
-                "fileName": m['nombre_archivo']
-            } for m in mensajes]
+                "role": m['role'], 
+                "content": m['content'],
+                "fileName": m['file_name']
+            } for m in messages]
+            sessions.append(session)
             
         cursor.close()
         db.close()
-        return sesiones
+        return sessions
     return []
 
 
-def guardar_documento(chat_id, nombre, contenido):
-    """Guarda un documento PDF. Crea la sesión si no existe para evitar errores de FK."""
-    db = obtener_conexion()
+def save_document(chat_id, name, content):
+    db = get_connection()
     if db:
         try:
             cursor = db.cursor()
-
-            # Verificar si la sesión existe antes de insertar el PDF
-            cursor.execute("SELECT id FROM sesiones_chat WHERE id = %s", (chat_id,))
+            cursor.execute("SELECT id FROM chat_sessions WHERE id = %s", (chat_id,))
             if not cursor.fetchone():
-                cursor.execute("INSERT INTO sesiones_chat (id, titulo) VALUES (%s, %s)", (chat_id, "Nueva conversación"))
+                cursor.execute("INSERT INTO chat_sessions (id, title) VALUES (%s, %s)", (chat_id, "New conversation"))
 
-            query_doc = "INSERT INTO documentos_pdf (chat_id, nombre_archivo, contenido_texto) VALUES (%s, %s, %s)"
-            cursor.execute(query_doc, (chat_id, nombre, contenido))
+            query_doc = "INSERT INTO pdf_documents (chat_id, file_name, text_content) VALUES (%s, %s, %s)"
+            cursor.execute(query_doc, (chat_id, name, content))
 
             db.commit()
-            print(f"✅ PDF '{nombre}' guardado y sesión verificada para el chat {chat_id}.")
+            print(f" PDF '{name}' saved and session verified for chat {chat_id}.")
             cursor.close()
         except Exception as e:
-            print(f"❌ Error al guardar documento: {e}")
+            print(f" Error saving document: {e}")
         finally:
             db.close()
 
 
-def guardar_documento_rag(chat_id, nombre, texto_completo):
-    print(f"DEBUG: Longitud del texto recibido: {len(texto_completo)} caracteres")
-    db = obtener_conexion()
+def save_document_rag(chat_id, name, full_text):
+    db = get_connection()
     if db:
         try:
             cursor = db.cursor()
 
-            # Verificar si la sesión existe antes de insertar el PDF
-            cursor.execute("SELECT id FROM sesiones_chat WHERE id = %s", (chat_id,))
+            cursor.execute("SELECT id FROM chat_sessions WHERE id = %s", (chat_id,))
             if not cursor.fetchone():
-                cursor.execute("INSERT INTO sesiones_chat (id, titulo) VALUES (%s, %s)", (chat_id, "Nueva conversación"))
+                cursor.execute("INSERT INTO chat_sessions (id, title) VALUES (%s, %s)", (chat_id, "New conversation"))
 
-            # 1. Picar el texto (Chunking)
-            # Dividimos por bloques de 800 caracteres
-            chunks = [texto_completo[i:i + 800] for i in range(0, len(texto_completo), 800)]
-
-            # 2. Guardar cada trozo
-            for i, chunk_text in enumerate(chunks):
-                query = """
-                INSERT INTO documentos_chunks (chat_id, nombre_archivo, contenido_chunk, indice)
-                VALUES (%s, %s, %s, %s)
-                """
-                cursor.execute(query, (chat_id, nombre, chunk_text, i))
+            chunks = [full_text[i:i + 800] for i in range(0, len(full_text), 800)]
 
             db.commit()
-            print(f"✅ Documento '{nombre}' procesado para RAG y guardado ({len(chunks)} chunks) para el chat {chat_id}.")
-            cursor.close()
+
+            details_save = save_chunks_en_mysql(chunks, chat_id, name)
+
+            return details_save
+
+
         except Exception as e:
-            print(f"❌ Error al guardar documento RAG: {e}")
+            print(f" Error saving RAG document: {e}")
+
+        finally:
+            cursor.close()
+            db.close()
+
+def save_chunks_en_mysql(chunks, chat_id, file_name):
+    db = get_connection()
+    cursor = db.cursor(dictionary=True)
+    details_save = []
+
+    try:
+        for idx, content in enumerate(chunks):
+            query = "INSERT INTO document_chunks (chat_id, chunk_content, idx, file_name) VALUES (%s, %s, %s, %s)"
+            cursor.execute(query, (chat_id, content, idx, file_name))
+
+            current_id = cursor.lastrowid
+
+            details_save.append({
+            "id": current_id,
+            "content": content,
+            "idx": idx
+            })
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Error: {e}")
+
+    finally:
+        db.close()
+
+    return details_save
+
+def delete_pdf_db(chat_id, file_name):
+    db = get_connection()
+    if db:
+        try:
+            cursor = db.cursor()
+
+            cursor.execute(
+                "DELETE FROM document_chunks WHERE chat_id = %s AND TRIM(file_name) = TRIM(%s)",
+                (chat_id, file_name)
+            )
+            chunks_borrados = cursor.rowcount
+
+            # 2. Borramos el padre (pdf_documents)
+            cursor.execute(
+                "DELETE FROM pdf_documents WHERE chat_id = %s AND TRIM(file_name) = TRIM(%s)",
+                (chat_id, file_name)
+            )
+            pdf_borrado = cursor.rowcount
+            
+            db.commit()
+
+            if pdf_borrado > 0:
+                print(f" Éxito: Se borró el PDF y {chunks_borrados} chunks.")
+                return True
+            else:
+                print(f" El PDF no se borró. ¿El nombre '{file_name}' es exacto?")
+                return False
+
+        except Exception as e:
+            print(f" Error deleting PDF: {e}")
+            return False
         finally:
             db.close()
 
-def obtener_todos_los_documentos(chat_id, nombre_archivo=None):
-    """Recupera los PDFs guardados para este chat. Si se da un nombre, recupera solo ese."""
-    db = obtener_conexion()
+            try:
+                client = chromadb.PersistentClient(path=DB_PATH)
+                col = client.get_collection(name="document_chunks")
+
+                col.delete(
+                    where={"chat_id": str(chat_id), "file_name": file_name}
+                )
+                print(f" ChromaDB: Vectores eliminados para {file_name}")
+            except Exception as e:
+                print(f" Error en ChromaDB: {e}")
+    return False
+
+
+def get_all_documents(chat_id, file_name=None):
+    db = get_connection()
     if db:
         cursor = db.cursor()
 
-        if nombre_archivo:
+        if file_name:
             query = """
-                    SELECT nombre_archivo, contenido_texto
-                    FROM documentos_pdf
-                    WHERE chat_id = %s AND nombre_archivo = %s
+                    SELECT file_name, text_content
+                    FROM pdf_documents
+                    WHERE chat_id = %s AND file_name = %s
                     LIMIT 1
                     """
-            cursor.execute(query, (chat_id, nombre_archivo))
+            cursor.execute(query, (chat_id, file_name))
         else:
             query = """
-                    SELECT nombre_archivo, contenido_texto
-                    FROM documentos_pdf
+                    SELECT file_name, text_content
+                    FROM pdf_documents
                     WHERE chat_id = %s
-                    ORDER BY fecha_subida DESC
+                    ORDER BY upload_date DESC
                     """
             cursor.execute(query, (chat_id,))
             
         rows = cursor.fetchall()
 
-        contexto = ""
+        context = ""
         for row in rows:
-            contexto += f"\n--- ARCHIVO: {row[0]} ---\n{row[1]}\n"
+            context += f"\n--- FILE: {row[0]} ---\n{row[1]}\n"
 
         cursor.close()
         db.close()
 
-        return contexto
+        return context
 
     return ""
 
 
-def obtener_contexto_para_chat(chat_id):
-    """Obtiene el texto relacionado a la conversación actual, incluyendo chunks si existen."""
-    db = obtener_conexion()
+def get_chat_context(chat_id):
+    db = get_connection()
     if not db:
         return ""
 
     cursor = db.cursor(dictionary=True)
-    # 1) Obtener PDF más reciente
-    pdf_query = "SELECT nombre_archivo, contenido_texto FROM documentos_pdf WHERE chat_id = %s ORDER BY fecha_subida DESC LIMIT 1"
+    pdf_query = "SELECT file_name, text_content FROM pdf_documents WHERE chat_id = %s ORDER BY upload_date DESC LIMIT 1"
     cursor.execute(pdf_query, (chat_id,))
     pdf_row = cursor.fetchone()
-    pdf_text = pdf_row.get("contenido_texto") if pdf_row else ""
-    pdf_name = pdf_row.get("nombre_archivo") if pdf_row else None
+    pdf_text = pdf_row.get("text_content") if pdf_row else ""
+    pdf_name = pdf_row.get("file_name") if pdf_row else None
 
-    # 2) Obtener chunks
-    chunk_query = "SELECT nombre_archivo, contenido_chunk, indice FROM documentos_chunks WHERE chat_id = %s ORDER BY indice ASC"
+    chunk_query = "SELECT file_name, chunk_content, idx FROM document_chunks WHERE chat_id = %s ORDER BY idx ASC"
     cursor.execute(chunk_query, (chat_id,))
     chunks = cursor.fetchall()
 
-    contexto = ""
+    context = ""
     if chunks:
         for c in chunks:
-            contexto += f"\n--- ARCHIVO: {c['nombre_archivo']} (chunk {c['indice']}) ---\n{c['contenido_chunk']}"
-        contexto = contexto.strip()
-    if not contexto and pdf_text:
-        contexto = pdf_text
-    elif contexto and pdf_text:
-        contexto = f"{contexto}\n\nDATOS DEL ARCHIVO (PDF reciente: {pdf_name}):\n{pdf_text}"
+            context += f"\n--- FILE: {c['file_name']} (chunk {c['idx']}) ---\n{c['chunk_content']}"
+        context = context.strip()
+    if not context and pdf_text:
+        context = pdf_text
+    elif context and pdf_text:
+        context = f"{context}\n\nFILE DATA (recent PDF: {pdf_name}):\n{pdf_text}"
 
     cursor.close()
     db.close()
-    return contexto
+    return context

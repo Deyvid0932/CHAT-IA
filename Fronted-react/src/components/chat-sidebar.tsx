@@ -34,7 +34,6 @@ export function ChatSidebar({
 }: ChatSidebarProps) {
   return (
     <div className="flex flex-col h-full bg-card text-foreground">
-      {/* Header */}
       <div className="p-4 border-b border-border flex items-center justify-between gap-2">
         <Button
           onClick={onNewChat}
@@ -48,7 +47,6 @@ export function ChatSidebar({
         </Button>
       </div>
 
-      {/* Recent Chats */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="px-4 py-3 text-sm font-semibold text-muted-foreground flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -104,7 +102,6 @@ export function ChatSidebar({
         </ScrollArea>
       </div>
 
-      {/* Footer - SIEMPRE ABAJO */}
       <div className="p-4 border-t border-border bg-card/50 flex items-center justify-around mt-auto">
         <ThemeSwitcher />
         <Button

@@ -39,18 +39,15 @@ function App() {
   const [pdfContent, setPdfContent] = useState('')
   const [pdfName, setPdfName] = useState('')
 
-  // Sincronizar mensajes cuando cambia el chat seleccionado
   useEffect(() => {
     const currentChat = chats.find(c => c.id === currentChatId)
     if (currentChat) {
       setMessages(currentChat.messages || [])
-      // Al cambiar de chat o recargar, NO cargamos el PDF en el input bar
-      // El asistente ya tiene el contexto en el backend.
       setPdfContent('')
       setPdfName('')
       setPdfLoaded(false)
     } else if (chats.length > 0 && !currentChatId) {
-      // No hacer nada
+
     } else {
       setMessages([])
       setPdfContent('')
@@ -66,10 +63,10 @@ function App() {
   const onSendMessage = useCallback(async (content: string, fileName?: string) => {
     let activeChatId = currentChatId
     
-    // Si no hay chat seleccionado, crear uno automáticamente
+
     if (!activeChatId) {
       const newChat = await createNewChat()
-      if (!newChat) return // Error al crear chat
+      if (!newChat) return
       activeChatId = newChat.id
     }
 
@@ -87,7 +84,6 @@ function App() {
     updateChatMessages(activeChatId, updatedMessages)
     setIsLoading(true)
 
-    // LIMPIEZA INMEDIATA: Borramos el PDF del área de entrada ni bien se manda
     const pdfContentToSend = pdfContent
     const pdfNameToSend = currentFile
 
@@ -103,7 +99,7 @@ function App() {
           message: content,
           pdfContext: pdfContentToSend,
           chatId: activeChatId,
-          fileName: pdfNameToSend, // Enviamos el nombre al backend
+          fileName: pdfNameToSend,
           conciseness: conciseness,
           speed: speed
         }),
@@ -114,7 +110,7 @@ function App() {
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: data.response || 'No recibí respuesta del servidor.',
+        content: data.response || 'No response received from the server.',
       }
 
       const finalMessages = [...updatedMessages, assistantMessage]
@@ -128,27 +124,35 @@ function App() {
     }  }, [currentChatId, messages, pdfContent, pdfName, conciseness, speed, createNewChat, updateChatMessages])
 
   const onPdfUpload = useCallback(async (content: string, uploadChatId: string, fileName?: string) => {
-    // Ya tenemos el chatId que usó ChatInput para subir el PDF
-    const name = fileName || 'Documento PDF'
-    updateChatPDF(uploadChatId, content, name)
-    
-    setPdfLoaded(true)
-    setPdfContent(content)
-    setPdfName(name)
-  }, [updateChatPDF])
+
+  if (!content && !fileName) {
+    updateChatPDF(uploadChatId, '', null)
+    setPdfLoaded(false)
+    setPdfContent('')
+    setPdfName(null)
+    return
+  }
+
+
+  const name = fileName || 'Documento PDF'
+  updateChatPDF(uploadChatId, content, name)
+
+  setPdfLoaded(true)
+  setPdfContent(content)
+  setPdfName(name)
+}, [updateChatPDF])
 
   const [colorScheme, setColorScheme] = useState<'default' | 'white' | 'dark'>('default')
 
   const getOrCreatedChatId = useCallback(async () => {
     if (currentChatId) return currentChatId
     const newChat = await createNewChat()
-    if (!newChat) return "" // O manejar de otra forma
+    if (!newChat) return ""
     return newChat.id
   }, [currentChatId, createNewChat])
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden relative">
-      {/* Universal Drawer - Overlays everything when open (PC & Mobile) */}
       <div 
         className={cn(
           "fixed inset-0 z-50 bg-black/20 transition-opacity duration-300",
@@ -191,7 +195,7 @@ function App() {
               <Menu size={24} />
             </Button>
             <h1 className="text-xl font-bold bg-gradient-to-r from-emerald-400 to-emerald-500 bg-clip-text text-transparent">
-              Asistente de IA
+              Asistente de IA RAG
             </h1>
           </div>
         </header>

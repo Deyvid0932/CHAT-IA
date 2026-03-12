@@ -1,63 +1,60 @@
-from fastapi import APIRouter, HTTPException
-from services.ollama_service import get_ollama_chat_response, buscar_chunks_relevantes
+from fastapi import APIRouter, HTTPException, Request
+from services.ollama_service import get_ollama_chat_response, search_relevant_chunks
 from services.database import (
-    guardar_mensaje, 
-    obtener_chats, 
-    crear_sesion_chat,
-    eliminar_sesion_chat,
-    eliminar_todos_los_chats,
-    actualizar_titulo_chat,
+    save_message, 
+    get_chats, 
+    create_chat_session,
+    delete_chat_session,
+    delete_all_chats,
+    update_chat_title,
 )
 
 router = APIRouter()
 
 @router.get("/chats")
-async def get_chats():
-    return {"chats": obtener_chats()}
+async def fetch_chats():
+    return {"chats": get_chats()}
 
 @router.post("/chats")
 async def create_chat(data: dict):
     chat_id = data.get("id")
-    titulo = data.get("title", "Nueva conversación")
-    crear_sesion_chat(chat_id, titulo)
+    title = data.get("title", "New conversation")
+    create_chat_session(chat_id, title)
     return {"status": "success"}
 
 @router.delete("/chats/{chat_id}")
 async def delete_chat(chat_id: str):
-    eliminar_sesion_chat(chat_id)
+    delete_chat_session(chat_id)
     return {"status": "success"}
 
 @router.delete("/chats")
 async def clear_chats():
-    eliminar_todos_los_chats()
+    delete_all_chats()
     return {"status": "success"}
 
 @router.post("/chat")
-async def chat_endpoint(data: dict):
-    pregunta = data.get("message")
+async def chat_endpoint(request: Request):
+    data = await request.json()
+    question = data.get("message")
     chat_id = data.get("chatId")
-    file_name = data.get("fileName") # Recibimos el nombre del archivo
+    file_name = data.get("fileName") 
 
     if not chat_id:
-        raise HTTPException(status_code=400, detail="chatId es requerido")
+        raise HTTPException(status_code=400, detail="chatId is required")
 
     conciseness = data.get("conciseness", "balanced")
     speed = data.get("speed", "normal")
 
     if data.get("resetContext"):
-        contexto_final = ""
+        final_context = ""
     else:
-        # Usamos RAG para buscar chunks relevantes en lugar de todo el texto
-        contexto_final = buscar_chunks_relevantes(chat_id, pregunta)
+        final_context = search_relevant_chunks(chat_id, question)
 
-    respuesta = get_ollama_chat_response(pregunta, contexto_final, conciseness, speed)
+    response = get_ollama_chat_response(question, final_context, conciseness, speed)
 
-    # GUARDAR EN LA BASE DE DATOS con el nombre del archivo si existe
-    guardar_mensaje(chat_id, "user", pregunta, file_name)
-    guardar_mensaje(chat_id, "assistant", respuesta)
+    save_message(chat_id, "user", question, file_name)
+    save_message(chat_id, "assistant", response)
 
-    # Actualizar título si es el primer mensaje (basado en la pregunta)
-    # Solo actualizamos si es un chat nuevo o no tiene título significativo todavía
-    actualizar_titulo_chat(chat_id, pregunta[:30] + "...")
+    update_chat_title(chat_id, question[:30] + "...")
 
-    return {"response": respuesta}
+    return {"response": response}

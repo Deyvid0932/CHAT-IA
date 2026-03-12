@@ -73,12 +73,34 @@ export function ChatInput({
     }
   }
 
- const clearPDF = () => {
-    setPdfFile(null)
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
+  const handleBorrarTodo = async () => {
+  const nameToDelete = currentFileName;
+
+  if (nameToDelete && chatId) {
+    try {
+      const encodedName = encodeURIComponent(nameToDelete);
+
+      const url = `http://127.0.0.1:8000/delete-pdf/${chatId}/${encodedName}`;
+
+      const response = await fetch(url, { method: 'DELETE' });
+
+      if (response.ok) {
+        console.log("✅ Backend: Chunks deleted");
+      } else {
+        console.error("❌ Backend responded with error:", response.status);
+      }
+    } catch (error) {
+      console.error("❌ Network error when trying to delete:", error);
     }
   }
+
+  onPdfUpload('', chatId || '', '');
+
+  setPdfFile(null);
+  if (fileInputRef.current) {
+    fileInputRef.current.value = '';
+  }
+};
 
   const currentFileName = pdfFile?.name || (pdfLoaded ? pdfName : null)
 
@@ -92,7 +114,7 @@ export function ChatInput({
             <span className="truncate">{currentFileName}</span>
           </div>
           <button
-            onClick={clearPDF}
+            onClick={handleBorrarTodo}
             className="text-emerald-600 hover:text-emerald-500 transition-colors"
           >
             <X size={18} />

@@ -1,7 +1,9 @@
 import ollama
 import re
+import chromadb
 
-from services.database import model, obtener_conexion
+from config import DB_PATH
+
 
 
 def clean_ai_response(text):
@@ -14,50 +16,48 @@ def clean_ai_response(text):
 
     return text.strip()
 
-def get_ollama_chat_response(pregunta, contexto, conciseness, speed):
-    instrucciones_estilo = {
-        "concise": "Sé muy breve, directo y usa listas numeradas si es necesario. Máximo 2-3 frases.",
-        "balanced": "Proporciona una respuesta equilibrada, clara y directa.",
-        "detailed": "Explica con detalle, profundidad y paso a paso."
+def get_ollama_chat_response(question, context, conciseness, speed):
+    style_instructions = {
+        "concise": "Be very brief and direct. Use numbered lists if necessary. Maximum 3-4 sentences.",
+        "balanced": "Provide a balanced, clear, and direct response.",
+        "detailed": "Explain in detail, providing depth and a step-by-step breakdown."
     }
-    estilo = instrucciones_estilo.get(conciseness, instrucciones_estilo["balanced"])
+    style = style_instructions.get(conciseness, style_instructions["balanced"])
 
-    opciones = {
-        "fast": {"num_predict": 256, "temperature": 0.1},
-        "normal": {"num_predict": 756, "temperature": 0.7}
+    options = {
+        "fast": {"num_predict": 256, "temperature": 0},
+        "normal": {"num_predict": 756, "temperature": 0}
     }
-    config = opciones.get(speed, opciones["normal"])
+    config = options.get(speed, options["normal"])
 
     system_prompt = (
-        f"Eres un asistente experto. Estilo requerido: {estilo}\n"
-        "REGLAS CRÍTICAS DE FORMATO: No uses asteriscos (**) ni negritas. "
-        "Trata de responder el ultimo pdf del usuario donde este sea de foma descendente el ultimo ande como primero y que no se combine la informacion si se llea al minimo de caracteres y resetees "
-        "Escribe cada oración en una línea nueva tras un punto. "
-        "REGLAS DE CONTEXTO: Utiliza prioritariamente la información de los 'DATOS DEL ARCHIVO' proporcionados. "
-        "Si hay varios archivos, prioriza el que aparezca primero en el texto (es el más reciente). "
-        "Si la respuesta no está en el contexto, responde con cultura general. "
-        "PROHIBICIÓN ABSOLUTA: No menciones jamás las palabras 'PDF', 'documento', 'contexto' , 'información proporcionada' o frases sobre la falta de información en el PDF. "
-        "Si no sabes algo por el contexto, NO te justifiques, simplemente responde lo que sepas. "
-        "AISLAMIENTO: Ignora archivos de sesiones anteriores. Solo importa el contexto enviado ahora. "
-        "Si la respuesta es muy larga trata de acortarla pero termina la idea. "
-        "CIERRE: Termina siempre con una pregunta de seguimiento relevante sin mencionar archivos."
-    )
+        f"""
+        [INSTRUCCIÓN CRUCIAL]
+        Eres un asistente que SOLO tiene permitido usar la información del CONTEXTO suministrado abajo. 
+        Si la respuesta no está en el CONTEXTO, responde estrictamente: "Lo siento, no encuentro esa información en el documento".
+        Prohibido usar conocimientos externos.
+        """
+        f"Eres un asistente experto. Estilo requerido: {style}\n"
+        "REGLA DE IDIOMA: Responde SIEMPRE en el mismo idioma que utilice el usuario en su pregunta (Español).\n"
+        "REGLAS DE FORMATO CRÍTICAS: No uses asteriscos (**) ni texto en negrita.\n"
+        "Escribe cada oración en una línea nueva después de cada punto.\n"
+        "REGLAS DE CONTEXTO: Usa los datos proporcionados como fuente primaria.\n"
+        "CIERRE: Termina siempre con una pregunta de seguimiento relevante."    )
 
     messages = [
-        {"role": "system", "content": system_prompt}  # El "Jefe" da las órdenes aquí
+        {"role": "system", "content": system_prompt}
     ]
 
-    # Preparamos el contenido del usuario
-    contenido_usuario = ""
-    if contexto:
-        # Ya no limitamos a 10000 caracteres
-        contenido_usuario += f"DATOS DEL ARCHIVO:\n{contexto}\n\n"
+    # Prepare user content
+    user_content = ""
+    if context:
+        user_content += f"FILE DATA:\n{context}\n\n"
 
-    contenido_usuario += f"PREGUNTA DEL USUARIO: {pregunta}"
+    user_content += f"USER QUESTION: {question}"
 
-    messages.append({"role": "user", "content": contenido_usuario})
+    messages.append({"role": "user", "content": user_content})
 
-    # Llamada a Ollama con la estructura de roles
+    # Ollama call
     response = ollama.chat(
         model='llama3',
         messages=messages,
@@ -68,34 +68,26 @@ def get_ollama_chat_response(pregunta, contexto, conciseness, speed):
     return clean_ai_response(raw_response)
 
 
-def buscar_chunks_relevantes(chat_id, pregunta_usuario):
-    db = obtener_conexion()
-    cursor = db.cursor(dictionary=True)
+def search_relevant_chunks(chat_id, user_question):
+    client = chromadb.PersistentClient(path=DB_PATH)
+    col = client.get_collection(name="document_chunks")
 
-    # Traemos todos los chunks del chat
-    cursor.execute("SELECT contenido_chunk FROM documentos_chunks WHERE chat_id = %s", (chat_id,))
-    todos_los_chunks = cursor.fetchall()
 
-    if not todos_los_chunks:
-        return ""
+    results = col.query(
+        query_texts=[user_question],
+        n_results=3,
+        where={"chat_id": str(chat_id)}
+    )
 
-    textos = [c['contenido_chunk'] for c in todos_los_chunks]
+    if results['documents'] and len(results['documents'][0]) > 0:
+        final_context = "\n\n".join(results['documents'][0])
 
-    # Convertimos pregunta y chunks a vectores
-    embeddings_chunks = model.encode(textos)
-    embedding_pregunta = model.encode([pregunta_usuario])
+        print("DEBUG: La IA va a leer estos fragmentos:")
+        for i, doc in enumerate(results['documents'][0]):
+            print(f"Fragmento {i + 1}: {doc[:100]}...")
 
-    # Calculamos similitud (esto es matemáticas de vectores)
-    import numpy as np
-    from sklearn.metrics.pairwise import cosine_similarity
+        return final_context
 
-    similitudes = cosine_similarity(embedding_pregunta, embeddings_chunks)[0]
 
-    # Tomamos los 3 mejores índices
-    indices_top = np.argsort(similitudes)[-3:][::-1]
 
-    contexto_final = "\n".join([textos[i] for i in indices_top])
-
-    cursor.close()
-    db.close()
-    return contexto_final
+    return "No encontré información relevante."

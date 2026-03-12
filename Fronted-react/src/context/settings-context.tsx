@@ -23,7 +23,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [speed, setSpeedState] = useState<Speed>('normal')
   const [mounted, setMounted] = useState(false)
 
-  // Load from localStorage on mount
   useEffect(() => {
     const savedTheme = localStorage.getItem('chat-theme') as Theme | null
     const savedConciseness = localStorage.getItem('chat-conciseness') as Conciseness | null
@@ -36,7 +35,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setMounted(true)
   }, [])
 
-  // Apply theme to HTML element
   useEffect(() => {
     if (!mounted) return
 

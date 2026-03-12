@@ -19,7 +19,7 @@ export function useChatLocal() {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null)
   const [isLoaded, setIsLoaded] = useState(false)
 
-  // Load chats from Database instead of localStorage
+
   useEffect(() => {
     const fetchChats = async () => {
       try {
@@ -28,22 +28,21 @@ export function useChatLocal() {
         
         const parsedChats = data.chats.map((chat: any) => ({
           id: chat.id,
-          title: chat.titulo,
-          pdfName: chat.pdf_nombre,
+          title: chat.title,
+          pdfName: chat.file_name,
           messages: (chat.messages || []).map((m: any) => ({
             id: m.id,
             role: m.role,
             content: m.content,
-            fileName: m.fileName || null // Aquí aseguramos que React reciba fileName correctamente
+            fileName: m.fileName || null
           })),
-          pdfContent: chat.pdf_content,
-          createdAt: new Date(chat.fecha_creacion),
-          updatedAt: new Date(chat.fecha_actualizacion),
+          pdfContent: chat.text_content,
+          createdAt: new Date(chat.created_at),
+          updatedAt: new Date(chat.updated_at),
         }))
         
         setChats(parsedChats)
-        
-        // Recuperar el último chat abierto de localStorage
+
         const lastChatId = localStorage.getItem('last_chat_id')
         
         if (lastChatId && parsedChats.some((c: Chat) => c.id === lastChatId)) {
@@ -51,7 +50,7 @@ export function useChatLocal() {
         } else if (parsedChats.length > 0) {
           setCurrentChatId(parsedChats[0].id)
         } else {
-          // Si no hay chats en la DB, creamos el primero
+
           createNewChat()
         }
       } catch (e) {
@@ -63,7 +62,6 @@ export function useChatLocal() {
     fetchChats()
   }, [])
 
-  // Persistir el chat actual en localStorage cuando cambie
   useEffect(() => {
     if (currentChatId) {
       localStorage.setItem('last_chat_id', currentChatId)
@@ -104,8 +102,6 @@ export function useChatLocal() {
   }
 
   const updateChatMessages = (chatId: string, messages: any[]) => {
-    // Los mensajes se guardan en la DB automáticamente vía el endpoint /chat
-    // Aquí solo actualizamos el estado local para la UI inmediata
     setChats(prevChats => {
       return prevChats.map((chat) =>
         chat.id === chatId
@@ -124,7 +120,6 @@ export function useChatLocal() {
   }
 
   const updateChatPDF = (chatId: string, pdfContent: string, pdfName: string) => {
-    // Actualizamos el estado local para que la UI refleje el cambio inmediatamente
     setChats(prevChats => {
       return prevChats.map((chat) =>
         chat.id === chatId

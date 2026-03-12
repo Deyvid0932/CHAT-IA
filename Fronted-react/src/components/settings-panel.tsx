@@ -26,14 +26,12 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
 
   return (
     <>
-      {/* Overlay */}
       <div
         className="fixed inset-0 bg-black/50 z-40"
         onClick={onClose}
         aria-label="Cerrar settings"
       />
 
-      {/* Panel */}
       <div className="fixed right-0 top-0 h-screen w-80 bg-card border-l border-border shadow-xl z-50 overflow-y-auto">
         <div className="sticky top-0 flex items-center justify-between p-4 border-b border-border bg-card">
           <div className="flex items-center gap-2">
@@ -50,7 +48,6 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
         </div>
 
         <div className="p-6 space-y-8">
-          {/* Conciseness Section */}
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Lightbulb size={18} className="text-amber-500" />
@@ -75,7 +72,6 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             </div>
           </div>
 
-          {/* Speed Section */}
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Zap size={18} className="text-yellow-500" />
@@ -99,8 +95,6 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
               ))}
             </div>
           </div>
-
-          {/* Info */}
           <div className="pt-4 border-t border-border">
             <p className="text-xs text-muted-foreground text-center">
               Los ajustes se guardan automáticamente
